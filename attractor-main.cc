@@ -4,7 +4,7 @@
 // (but note, once linked against the led-matrix library, this is
 // covered by the GPL v2)
 //
-// This is a grab-bag of various demos and not very readable.
+// Basic operations originally taken from https://github.com/hzeller/rpi-rgb-led-matrix
 #include <assert.h>
 #include <getopt.h>
 #include <limits.h>
@@ -156,12 +156,12 @@ class ParticleSwarm : public DemoRunner {
       if ((max_x >= 63 && x_speed > 0) ||  // Right side
           (min_x <= 1 && x_speed < 0)) {   // Left side
         x_speed = -x_speed;
-        y_speed += deflection();  // introduce some randomness
+        y_speed += random_deflection();  // introduce some randomness
       }
       if ((max_y >= 31 && y_speed > 0) ||  // Bottom
           (min_y <= 1 && y_speed < 0)) {   // Top
         y_speed = -y_speed;
-        x_speed += deflection(); // introduce some randomness
+        x_speed += random_deflection();  // introduce some randomness
       }
 
       //  Keep speeds within bounds
@@ -184,19 +184,21 @@ class ParticleSwarm : public DemoRunner {
   }
 
  private:
-  void z_sort(Eigen::Matrix<double, 20, 3> &A_nx3) {
+  void z_sort(Eigen::Matrix<double, 20, 3> &point_matrix) {
     std::vector<Eigen::VectorXd> vec;
-    for (int64_t i = 0; i < A_nx3.rows(); ++i) vec.push_back(A_nx3.row(i));
+    for (int64_t i = 0; i < point_matrix.rows(); ++i)
+      vec.push_back(point_matrix.row(i));
 
     std::sort(vec.begin(), vec.end(),
               [](Eigen::VectorXd const &t1, Eigen::VectorXd const &t2) {
                 return t1(2) < t2(2);
               });
 
-    for (int64_t i = 0; i < A_nx3.rows(); ++i) A_nx3.row(i) = vec[i];
+    for (int64_t i = 0; i < point_matrix.rows(); ++i)
+      point_matrix.row(i) = vec[i];
   };
 
-  float deflection(void) { return float((rand() % 3) - 2) / 100.0; }
+  float random_deflection(void) { return float((rand() % 3) - 2) / 100.0; }
 };
 
 // Plasma
