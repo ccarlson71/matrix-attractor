@@ -4,7 +4,8 @@
 // (but note, once linked against the led-matrix library, this is
 // covered by the GPL v2)
 //
-// Basic operations originally taken from https://github.com/hzeller/rpi-rgb-led-matrix
+// Basic operations originally taken from
+// https://github.com/hzeller/rpi-rgb-led-matrix
 #include <assert.h>
 #include <getopt.h>
 #include <limits.h>
@@ -41,23 +42,33 @@ using namespace rgb_matrix;
 
 volatile bool interrupt_received = false;
 volatile bool keystroke_exited = false;
+volatile bool SIGUSR1_received = false;
+volatile bool SIGUSR2_received = false;
 static void InterruptHandler(int signo) { interrupt_received = true; }
+static void SIGUSR1Handler(int signo) { SIGUSR1_received = true; }
+static void SIGUSR2Handler(int signo) { SIGUSR2_received = true; }
 
 // Pass pointer to Color, pointer to string. Color gets updated
 // Returns bool true if parsing successful
 // Ex: if (!parseColor(&color, optarg)) ...
 static bool parseColor(Color *c, std::string str) {
-  std::stringstream colorspec(str);
-  std::vector<int> result;
-  while (colorspec.good()) {
-    std::string substr;
-    getline(colorspec, substr, ',');
-    result.push_back(std::stoi(substr));
+  try {
+    std::stringstream colorspec(str);
+    std::vector<int> result;
+    while (colorspec.good()) {
+      std::string substr;
+      getline(colorspec, substr, ',');
+      result.push_back(std::stoi(substr));
+    }
+    c->r = result[0];
+    c->g = result[1];
+    c->b = result[2];
+    return true;
   }
-  c->r = result[0];
-  c->g = result[1];
-  c->b = result[2];
-  return true;
+
+  catch (...) {
+    return false;
+  }
 }
 
 class DemoRunner {
@@ -218,10 +229,11 @@ class Plasma : public DemoRunner {
   double sqrt_lut[5120];
 
   Color plasma_palette[PLASMA_PALETTE_SIZE];
+  Color anchor_colors[MAX_PLASMA_COLORS];
 
   void Run() override {
-    std::thread enter_to_exit(wait_for_keystroke);
-    enter_to_exit.detach();
+    std::thread keystroke_to_exit(wait_for_keystroke);
+    keystroke_to_exit.detach();
 
     bool on_timer = end_time_ > 0;
 
@@ -235,61 +247,49 @@ class Plasma : public DemoRunner {
     const int height = canvas()->height();
 
     // Generate palette
-    Color anchor_colors[MAX_PLASMA_COLORS];
+
+    bool generate_random = true;
 
     if (palette_filename_ != "") {
-      cout << "Loading palette from file: " << palette_filename_ << '\n';
-      plasma_color_count_ = 0;
-
       std::ifstream infile(palette_filename_);
-      std::string line;
-      while (std::getline(infile, line)) {
-        Color newColor;
-        if (line[0] != '#') {  // Comments? I dunno
-          if (!parseColor(&newColor, line)) {
-            cout << "Could not parse color spec: " << line << '\n';
-          } else {
-            anchor_colors[plasma_color_count_] = newColor;
-            plasma_color_count_++;
-            if (plasma_color_count_ == MAX_PLASMA_COLORS) {
-              break;
+      if (infile) {
+        cout << "Loading palette from file: " << palette_filename_ << '\n';
+        plasma_color_count_ = 0;
+        std::string line;
+        while (std::getline(infile, line)) {
+          Color newColor;
+          if (line[0] != '#') {  // Comments? I dunno
+            if (parseColor(&newColor, line)) {
+              anchor_colors[plasma_color_count_] = newColor;
+              plasma_color_count_++;
+              if (plasma_color_count_ == MAX_PLASMA_COLORS) {
+                break;
+              }
             }
           }
         }
-      }
-    } else {
-      cout << "Generating a random palette\n";
-      anchor_colors[0] = Color(0, 0, 0);
-      for (int x = 1; x < plasma_color_count_; x++) {
-        anchor_colors[x] = Color(random_byte(), random_byte(), random_byte());
-      }
-    }
 
-    cout << "Palette anchors (" << std::to_string(plasma_color_count_)
-         << " colors):\n";
-    for (int x = 0; x < plasma_color_count_; x++) {
-      Color color = anchor_colors[x];
-      cout << +color.r << ',' << +color.g << ',' << +color.b << '\n';
-    }
-
-    int palette_steps = PLASMA_PALETTE_SIZE / plasma_color_count_;
-    double deg_smoothing_step = 180.0 / float(palette_steps);
-
-    for (int anchor_idx = 0; anchor_idx < plasma_color_count_; anchor_idx++) {
-      int start_idx = anchor_idx * palette_steps;
-      int stop_idx = start_idx + palette_steps;
-      int to_idx = (anchor_idx + 1) % plasma_color_count_;
-
-      for (int i = start_idx; i < stop_idx; i++) {
-        int j = i % palette_steps;
-        double degs = j * deg_smoothing_step;
-        double rads = (degs * 71) / 4068.0;
-        double f = 1.0 - ((cos(rads) + 1) / 2.0);
-
-        plasma_palette[i] = interpolate_palette(anchor_colors[anchor_idx],
-                                                anchor_colors[to_idx], f);
+        if (plasma_color_count_ > 1) {
+          generate_random = false;
+        } else {
+          cout << "Insufficient palette entries found.\n";
+          generate_random = true;
+          plasma_color_count_ = 6;
+        }
+      } else {
+        cout << "Could not find palette file " << palette_filename_ << '\n';
+        generate_random = true;
       }
     }
+
+    if (generate_random) {
+      generate_random_palette_anchors();
+    }
+
+    dump_palette();
+
+    smooth_palette();
+
     //////////
 
     // Generate LUTs
@@ -309,6 +309,13 @@ class Plasma : public DemoRunner {
 
     while (!interrupt_received && !keystroke_exited &&
            !(on_timer && time(NULL) >= end_time_)) {
+      if (SIGUSR1_received) {
+        SIGUSR1_received = false;
+        generate_random_palette_anchors();
+        dump_palette();
+        smooth_palette();
+      }
+
       x_drift += x_drift_rate;
       y_drift += y_drift_rate;
 
@@ -349,6 +356,44 @@ class Plasma : public DemoRunner {
     bool negative = rand() % 2 == 0;
     double abs_drift = 0.05 + (double((rand() % 10) / 100.0));
     return abs_drift * (negative ? -1.0 : 1.0);
+  }
+
+  void generate_random_palette_anchors(void) {
+    cout << "Generating a random palette\n";
+    anchor_colors[0] = Color(0, 0, 0);
+    for (int x = 1; x < plasma_color_count_; x++) {
+      anchor_colors[x] = Color(random_byte(), random_byte(), random_byte());
+    }
+  }
+
+  void dump_palette(void) {
+    cout << "Palette anchors (" << std::to_string(plasma_color_count_)
+         << " colors):\n";
+    for (int x = 0; x < plasma_color_count_; x++) {
+      Color color = anchor_colors[x];
+      cout << +color.r << ',' << +color.g << ',' << +color.b << '\n';
+    }
+  }
+
+  void smooth_palette(void) {
+    int palette_steps = PLASMA_PALETTE_SIZE / plasma_color_count_;
+    double deg_smoothing_step = 180.0 / float(palette_steps);
+
+    for (int anchor_idx = 0; anchor_idx < plasma_color_count_; anchor_idx++) {
+      int start_idx = anchor_idx * palette_steps;
+      int stop_idx = start_idx + palette_steps;
+      int to_idx = (anchor_idx + 1) % plasma_color_count_;
+
+      for (int i = start_idx; i < stop_idx; i++) {
+        int j = i % palette_steps;
+        double degs = j * deg_smoothing_step;
+        double rads = (degs * 71) / 4068.0;
+        double f = 1.0 - ((cos(rads) + 1) / 2.0);
+
+        plasma_palette[i] = interpolate_palette(anchor_colors[anchor_idx],
+                                                anchor_colors[to_idx], f);
+      }
+    }
   }
 
   int plasma_color_count_;
@@ -611,6 +656,8 @@ int main(int argc, char *argv[]) {
   // so they exit as soon as they get a signal.
   signal(SIGTERM, InterruptHandler);
   signal(SIGINT, InterruptHandler);
+  signal(SIGUSR1, SIGUSR1Handler);
+  signal(SIGUSR2, SIGUSR2Handler);
 
   // Now, run our particular demo; it will exit when it sees interrupt_received.
   demo_runner->Run();
