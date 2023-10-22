@@ -1,0 +1,5 @@
+attractor
+*.o
+palette*
+compile_commands.json
+.cache/
