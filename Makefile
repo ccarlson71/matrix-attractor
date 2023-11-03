@@ -1,4 +1,4 @@
-CFLAGS=-Wall -O3 -g -Wextra -Wno-unused-parameter
+CFLAGS=-Wall -O3 -g -Wextra -Wno-unused-parameter -Wno-psabi
 CXXFLAGS=$(CFLAGS)
 OBJECTS=attractor-main.o
 BINARIES=attractor

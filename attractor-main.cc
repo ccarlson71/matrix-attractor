@@ -92,7 +92,7 @@ void wait_for_keystroke(void) {
 // Particle Swarm
 class ParticleSwarm : public DemoRunner {
  public:
-  ParticleSwarm(Canvas *m) : DemoRunner(m) {}
+  ParticleSwarm(Canvas *m, int model = 0) : DemoRunner(m), model_(model) {}
 
   const float max_swarm_rot_speed = 90.0;
 
@@ -109,11 +109,29 @@ class ParticleSwarm : public DemoRunner {
     float center_y = 16, center_x = 32;
 
     // A Cube
-    Eigen::Matrix<double, 20, 3> points{
+    Eigen::Matrix<double, 20, 3> cube{
         {-6, -6, -6}, {-6, -6, 0}, {-6, -6, 6}, {-6, 0, -6}, {-6, 0, 6},
         {-6, 6, -6},  {-6, 6, 0},  {-6, 6, 6},  {6, -6, -6}, {6, -6, 0},
         {6, -6, 6},   {6, 0, -6},  {6, 0, 6},   {6, 6, -6},  {6, 6, 0},
         {6, 6, 6},    {0, -6, -6}, {0, -6, 6},  {0, 6, -6},  {0, 6, 6}};
+    Eigen::Matrix<double, 18, 3> octahedron{
+        {6, 0, 0},  {-6, 0, 0}, {0, 6, 0},  {0, -6, 0},  {0, 0, 6},
+        {0, 0, -6}, {3, 3, 0},  {3, -3, 0}, {-3, 3, 0},  {-3, -3, 0},
+        {3, 0, 3},  {3, 0, -3}, {-3, 0, 3}, {-3, 0, -3}, {0, 3, 3},
+        {0, -3, 3}, {0, 3, -3}, {0, -3, -3}};
+
+    std::vector<Eigen::RowVector3d> points;
+
+    // Load points with the model
+    switch (model_) {
+      case 0:
+        for (int i = 0; i < cube.rows(); ++i) points.push_back(cube.row(i));
+        break;
+      case 1:
+        for (int i = 0; i < octahedron.rows(); ++i)
+          points.push_back(octahedron.row(i));
+        break;
+    }
 
     while (!interrupt_received) {
       angle_x += rot_speed_x * M_PI / 180.0;
@@ -135,17 +153,21 @@ class ParticleSwarm : public DemoRunner {
 
       Eigen::RowVector3d translation{center_x, center_y, 0};
 
-      Eigen::Matrix<double, 20, 3> transformed_points;
+      std::vector<Eigen::RowVector3d> transformed_points;
 
-      for (int64_t i = 0; i < transformed_points.rows(); ++i) {
-        transformed_points.row(i) = (points.row(i) * rotationMatrix);
+      for (int64_t i = 0; i < points.size(); ++i) {
+        Eigen::RowVector3d point = points[i];
+        transformed_points.push_back(point * rotationMatrix);
       }
 
-      z_sort(transformed_points);
-      transformed_points = transformed_points.rowwise() + translation;
+      // Z-sort points, so we can draw them with correct brightness later
+      std::sort(transformed_points.begin(), transformed_points.end(),
+                [](Eigen::RowVector3d const &t1, Eigen::RowVector3d const &t2) {
+                  return t1(2) < t2(2);
+                });
 
-      for (int64_t i = 0; i < transformed_points.rows(); ++i) {
-        Eigen::Vector3d point = transformed_points.row(i);
+      for (int64_t i = 0; i < points.size(); ++i) {
+        Eigen::RowVector3d point = transformed_points[i] += translation;
         x_tmp = point(0);
         y_tmp = point(1);
 
@@ -195,21 +217,9 @@ class ParticleSwarm : public DemoRunner {
   }
 
  private:
-  void z_sort(Eigen::Matrix<double, 20, 3> &point_matrix) {
-    std::vector<Eigen::VectorXd> vec;
-    for (int64_t i = 0; i < point_matrix.rows(); ++i)
-      vec.push_back(point_matrix.row(i));
-
-    std::sort(vec.begin(), vec.end(),
-              [](Eigen::VectorXd const &t1, Eigen::VectorXd const &t2) {
-                return t1(2) < t2(2);
-              });
-
-    for (int64_t i = 0; i < point_matrix.rows(); ++i)
-      point_matrix.row(i) = vec[i];
-  };
-
   float random_deflection(void) { return float((rand() % 3) - 2) / 100.0; }
+
+  int model_;
 };
 
 // Plasma
@@ -220,11 +230,12 @@ class ParticleSwarm : public DemoRunner {
 class Plasma : public DemoRunner {
  public:
   Plasma(Canvas *m, int plasma_color_count = 6, std::time_t end_time = 0,
-         std::string palette_filename = "")
+         std::string palette_filename = "", int sleep_delay = 5)
       : DemoRunner(m),
         plasma_color_count_(plasma_color_count),
         end_time_(end_time),
-        palette_filename_(palette_filename) {}
+        palette_filename_(palette_filename),
+        sleep_delay_(sleep_delay) {}
 
   double sqrt_lut[5120];
 
@@ -240,7 +251,7 @@ class Plasma : public DemoRunner {
     plasma_color_count_ = min(plasma_color_count_, MAX_PLASMA_COLORS);
 
     double current_value = float(rand() % 10000);
-    double step_value = 0.1;
+    double step_value = 0.07;
 
     const double plasma_randomizing_param = 10 + ((rand() % 750) / 50.0);
     const int width = canvas()->width();
@@ -338,7 +349,8 @@ class Plasma : public DemoRunner {
       }
 
       current_value += step_value;
-      usleep(5 * 1000);  // limits to ~60fps; each frame takes ~11ms to generate
+      usleep(sleep_delay_ *
+             1000);  // limits to ~60fps; each frame takes ~11ms to generate
     }
   }
 
@@ -399,6 +411,7 @@ class Plasma : public DemoRunner {
   int plasma_color_count_;
   time_t end_time_;
   std::string palette_filename_;
+  int sleep_delay_;
 };
 
 // Conway's game of life
@@ -555,7 +568,7 @@ static int usage(const char *progname) {
   fprintf(stderr, "Demos, choosen with -D\n");
   fprintf(stderr,
           "\t1  - Plasma (-p <# of palette 'anchor colors'> -r <run time "
-          "seconds>)\n"
+          "seconds> -d <inter-frame sleep microseconds>)\n"
           "\t2  - Conway's game of line (-m <time-step-ms>)\n"
           "\t3  - Particles\n");
   fprintf(stderr,
@@ -573,6 +586,8 @@ int main(int argc, char *argv[]) {
   int plasma_color_count = 6;
   long int run_time = 0;
   std::string filename = "";
+  int particles_model = 0;
+  int sleep_delay = 5;
 
   RGBMatrix::Options matrix_options;
   rgb_matrix::RuntimeOptions runtime_opt;
@@ -590,14 +605,19 @@ int main(int argc, char *argv[]) {
   }
 
   int opt;
-  while ((opt = getopt(argc, argv, "dD:f:r:P:c:p:b:m:LR:")) != -1) {
+  while ((opt = getopt(argc, argv, "d:D:f:r:P:c:p:b:m:LR:")) != -1) {
     switch (opt) {
+      case 'd':
+        sleep_delay = atoi(optarg);
+        break;
+
       case 'D':
         demo = atoi(optarg);
         break;
 
       case 'm':
         scroll_ms = atoi(optarg);
+        particles_model = atoi(optarg);
         break;
 
       case 'p':
@@ -637,7 +657,8 @@ int main(int argc, char *argv[]) {
   DemoRunner *demo_runner = NULL;
   switch (demo) {
     case 1:
-      demo_runner = new Plasma(canvas, plasma_color_count, end_time, filename);
+      demo_runner = new Plasma(canvas, plasma_color_count, end_time, filename,
+                               sleep_delay);
       break;
 
     case 2:
@@ -645,7 +666,7 @@ int main(int argc, char *argv[]) {
       break;
 
     case 3:
-      demo_runner = new ParticleSwarm(canvas);
+      demo_runner = new ParticleSwarm(canvas, particles_model);
       break;
   }
 
